@@ -1,4 +1,3 @@
-import asyncio
 from pathlib import Path
 
 import anyio
@@ -73,7 +72,10 @@ async def download_album(
     fmt: str = "mp3",
 ) -> Album:
     # Phase 1: scrape all track pages sequentially with polite delay
-    console.print(f"[bold]Scraping track pages for:[/bold] {album.title}")
+    console.print(
+        f"[bold]Scraping {len(album.tracks)} track pages for:[/bold] {album.title} "
+        f"[dim](~{len(album.tracks) * delay:.0f}s)[/dim]"
+    )
     failed_scrape: list[Track] = []
     for i, track in enumerate(album.tracks):
         try:
@@ -83,7 +85,7 @@ async def download_album(
             console.print(f"  [red]FAILED[/red] {track.title}: {exc}")
             failed_scrape.append(track)
         if i < len(album.tracks) - 1:
-            await asyncio.sleep(delay)
+            await anyio.sleep(delay)
 
     resolved = [t for t in album.tracks if t.direct_url is not None]
     console.print(f"\n[bold]Downloading {len(resolved)} tracks…[/bold]")

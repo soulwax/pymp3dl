@@ -9,13 +9,19 @@ from .utils import fetch_with_retry, sanitize_filename
 BASE_URL = "https://downloads.khinsider.com"
 
 
-def _find_format_col_index(headers: list[str], fmt: str) -> int:
-    """Return the column index of the requested format header (case-insensitive)."""
-    upper = fmt.upper()
+def _col_index(headers: list[str], *candidates: str) -> int | None:
+    """Return the first column index whose header matches any candidate (case-insensitive)."""
     for i, h in enumerate(headers):
-        if h.strip().upper() == upper:
+        if h.strip().upper() in {c.upper() for c in candidates}:
             return i
-    raise ValueError(f"No '{fmt}' column found in track table. Headers: {headers}")
+    return None
+
+
+def _find_format_col_index(headers: list[str], fmt: str) -> int:
+    idx = _col_index(headers, fmt)
+    if idx is None:
+        raise ValueError(f"No '{fmt}' column found in track table. Headers: {headers}")
+    return idx
 
 
 async def scrape_album(url: str, client: httpx.AsyncClient, fmt: str = "mp3") -> Album:
@@ -37,6 +43,8 @@ async def scrape_album(url: str, client: httpx.AsyncClient, fmt: str = "mp3") ->
 
     headers = [th.get_text(strip=True) for th in header_row.find_all(["th", "td"])]
     fmt_col = _find_format_col_index(headers, fmt)
+    num_col = _col_index(headers, "#", "No.", "Number", "Track")
+    title_col = _col_index(headers, "Song Name", "Name", "Title", "Song")
 
     tracks: list[Track] = []
     rows = table.find_all("tr")[1:]  # type: ignore[union-attr]
@@ -44,13 +52,17 @@ async def scrape_album(url: str, client: httpx.AsyncClient, fmt: str = "mp3") ->
         tds = row.find_all("td")
         if len(tds) <= fmt_col:
             continue
-        try:
-            number_text = tds[0].get_text(strip=True).rstrip(".")
-            number = int(number_text) if number_text.isdigit() else len(tracks) + 1
-        except (ValueError, IndexError):
+
+        if num_col is not None and len(tds) > num_col:
+            raw = tds[num_col].get_text(strip=True).rstrip(".")
+            number = int(raw) if raw.isdigit() else len(tracks) + 1
+        else:
             number = len(tracks) + 1
 
-        title = tds[1].get_text(strip=True) if len(tds) > 1 else f"Track {number}"
+        if title_col is not None and len(tds) > title_col:
+            title = tds[title_col].get_text(strip=True)
+        else:
+            title = f"Track {number}"
 
         link_tag = tds[fmt_col].find("a")
         if link_tag is None:
