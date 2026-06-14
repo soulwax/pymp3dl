@@ -1,7 +1,7 @@
 from urllib.parse import urljoin, urlparse
 
 import httpx
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 from .models import Album, Track
 from .utils import fetch_with_retry, sanitize_filename
@@ -10,7 +10,6 @@ BASE_URL = "https://downloads.khinsider.com"
 
 
 def _col_index(headers: list[str], *candidates: str) -> int | None:
-    """Return the first column index whose header matches any candidate (case-insensitive)."""
     for i, h in enumerate(headers):
         if h.strip().upper() in {c.upper() for c in candidates}:
             return i
@@ -29,16 +28,20 @@ async def scrape_album(url: str, client: httpx.AsyncClient, fmt: str = "mp3") ->
     soup = BeautifulSoup(response.text, "lxml")
 
     title_tag = soup.find("h2")
-    album_title = title_tag.get_text(strip=True) if title_tag else urlparse(url).path.split("/")[-1]
+    album_title = (
+        title_tag.get_text(strip=True)
+        if isinstance(title_tag, Tag)
+        else urlparse(url).path.split("/")[-1]
+    )
 
     slug = urlparse(url).path.rstrip("/").split("/")[-1]
 
     table = soup.find("table", id="songlist")
-    if table is None:
+    if not isinstance(table, Tag):
         raise RuntimeError(f"Could not find #songlist table on {url}")
 
-    header_row = table.find("tr")  # type: ignore[union-attr]
-    if header_row is None:
+    header_row = table.find("tr")
+    if not isinstance(header_row, Tag):
         raise RuntimeError("Track table has no header row")
 
     headers = [th.get_text(strip=True) for th in header_row.find_all(["th", "td"])]
@@ -47,8 +50,9 @@ async def scrape_album(url: str, client: httpx.AsyncClient, fmt: str = "mp3") ->
     title_col = _col_index(headers, "Song Name", "Name", "Title", "Song")
 
     tracks: list[Track] = []
-    rows = table.find_all("tr")[1:]  # type: ignore[union-attr]
-    for row in rows:
+    for row in table.find_all("tr")[1:]:
+        if not isinstance(row, Tag):
+            continue
         tds = row.find_all("td")
         if len(tds) <= fmt_col:
             continue
@@ -65,9 +69,9 @@ async def scrape_album(url: str, client: httpx.AsyncClient, fmt: str = "mp3") ->
             title = f"Track {number}"
 
         link_tag = tds[fmt_col].find("a")
-        if link_tag is None:
+        if not isinstance(link_tag, Tag):
             continue
-        track_page_url = urljoin(BASE_URL, link_tag["href"])
+        track_page_url = urljoin(BASE_URL, str(link_tag["href"]))
 
         tracks.append(Track(number=number, title=title, track_page_url=track_page_url))
 
@@ -82,27 +86,29 @@ async def scrape_track_page(track: Track, client: httpx.AsyncClient, fmt: str = 
 
     # Priority 1: <audio src="...">
     audio_tag = soup.find("audio")
-    if audio_tag and audio_tag.get("src"):  # type: ignore[union-attr]
-        direct_url = str(audio_tag["src"])  # type: ignore[index]
+    if isinstance(audio_tag, Tag) and audio_tag.get("src"):
+        direct_url = str(audio_tag["src"])
 
     # Priority 2: <a class="songDownloadLink">
     if direct_url is None:
         dl_link = soup.find("a", class_="songDownloadLink")
-        if dl_link and dl_link.get("href"):  # type: ignore[union-attr]
-            direct_url = str(dl_link["href"])  # type: ignore[index]
+        if isinstance(dl_link, Tag) and dl_link.get("href"):
+            direct_url = str(dl_link["href"])
 
     # Priority 3: <p class="songDownloadLink"> containing an <a>
     if direct_url is None:
         p_tag = soup.find("p", class_="songDownloadLink")
-        if p_tag:
-            a_tag = p_tag.find("a")  # type: ignore[union-attr]
-            if a_tag and a_tag.get("href"):
+        if isinstance(p_tag, Tag):
+            a_tag = p_tag.find("a")
+            if isinstance(a_tag, Tag) and a_tag.get("href"):
                 direct_url = str(a_tag["href"])
 
     # Fallback: any <a href> ending in the desired format not on khinsider domain
     if direct_url is None:
         ext = f".{fmt}"
         for a_tag in soup.find_all("a", href=True):
+            if not isinstance(a_tag, Tag):
+                continue
             href = str(a_tag["href"])
             if href.lower().endswith(ext) and "khinsider.com" not in href:
                 direct_url = href

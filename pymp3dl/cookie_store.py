@@ -11,7 +11,8 @@ def load_cookies() -> dict[str, str]:
     if not COOKIE_FILE.exists():
         return {}
     try:
-        return json.loads(COOKIE_FILE.read_text(encoding="utf-8"))
+        result: dict[str, str] = json.loads(COOKIE_FILE.read_text(encoding="utf-8"))
+        return result
     except (json.JSONDecodeError, OSError):
         return {}
 
